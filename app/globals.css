@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --color-bg: 241 236 230;       /* #f1ece6 — off-white chaud */
+    --color-navbar: 228 224 221;   /* #e4e0dd */
+    --color-fg: 32 18 22;
+    --color-muted: 113 96 100;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  html, body {
+    background: rgb(var(--color-bg));
+    color: rgb(var(--color-fg));
+  }
+
+  body {
+    font-family: var(--font-sans), system-ui, sans-serif;
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  ::selection {
+    background-color: rgba(234, 163, 173, 0.45);
+    color: rgb(90, 18, 31);
+  }
+
+  @media print {
+    html,
+    body {
+      background: white;
+    }
+  }
+}
+
+@layer components {
+  .surface {
+    @apply rounded-2xl border border-zinc-200/70 bg-white shadow-soft;
+  }
+
+  .surface-muted {
+    @apply rounded-2xl border border-zinc-200/70 bg-zinc-50/60;
+  }
+
+  .focus-ring {
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 focus-visible:ring-offset-2 focus-visible:ring-offset-white;
+  }
+}

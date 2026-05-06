@@ -1,0 +1,434 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTH / STAFF
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum Role {
+  ADMIN   // Gérant·e
+  STAFF   // Vendeur·se
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+model User {
+  id                String     @id @default(cuid())
+  email             String     @unique
+  name              String
+  passwordHash      String
+  role              Role       @default(STAFF)
+  permissions       String[]   @default([])      // clés "products.create", "rentals.update"…
+  status            UserStatus @default(ACTIVE)
+  notificationPrefs Json       @default("{}")    // { rentals: bool, sales: bool, cash: bool, briefing: bool, deposits: bool, stock: bool }
+  lastLoginAt       DateTime?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  reservationsCreated     Reservation[]       @relation("ReservationCreatedBy")
+  salesCreated            Sale[]              @relation("SaleCreatedBy")
+  inspectionsDone         Inspection[]
+  cashTxRecorded          CashTransaction[]
+  auditLogs               AuditLog[]
+  generatedDocs           GeneratedDocument[]
+  templatesUpdated        DocumentTemplate[]  @relation("DocTemplateUpdatedBy")
+  notifications           Notification[]      @relation("UserNotifications")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CATALOGUE — Produits (location ET vente) + Variants stockés
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Product {
+  id                       String    @id @default(cuid())
+  reference                String    @unique          // ex: T001, robe-22
+  name                     String
+  designer                 String?
+  description              String?
+  category                 String?                    // soirée, mariage, cocktail…
+  purchasePrice            Decimal   @db.Decimal(10, 2) @default(0)
+  rentalPrice              Decimal   @db.Decimal(10, 2) @default(0)   // forfait location par robe (toute durée)
+  salePrice                Decimal   @db.Decimal(10, 2) @default(0)
+  deposit                  Decimal   @db.Decimal(10, 2) @default(0)
+  marginBetweenRentalsDays Int       @default(0)      // jours de battement nettoyage
+  isRentable               Boolean   @default(true)
+  isSellable               Boolean   @default(true)
+  variants                 ProductVariant[]
+  photos                   Photo[]
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
+
+  @@index([category])
+}
+
+// Un variant = un (produit, taille, couleur) avec une quantité en stock.
+model ProductVariant {
+  id               String    @id @default(cuid())
+  product          Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId        String
+  size             String                              // "36", "M", "Unique"…
+  color            String                              // nom ou hex
+  colorHex         String?                             // optionnel pour swatch UI
+  quantityInitial  Int       @default(1)
+  quantityCurrent  Int       @default(1)               // décrémenté à la vente définitive
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  reservationItems ReservationItem[]
+  saleItems        SaleItem[]
+
+  @@unique([productId, size, color])
+  @@index([productId])
+}
+
+model Photo {
+  id           String       @id @default(cuid())
+  url          String                               // URL MinIO
+  alt          String?
+  order        Int          @default(0)
+  product      Product?     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productId    String?
+  inspection   Inspection?  @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  inspectionId String?
+  createdAt    DateTime     @default(now())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CLIENTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Customer {
+  id            String   @id @default(cuid())
+  firstName     String
+  lastName      String
+  email         String?
+  phone         String
+  address       String?
+  city          String?
+  postalCode    String?
+  idDocumentRef String?                              // n° pièce d'identité (texte, pas de scan)
+  measurements  Json?                                // { bust, waist, hips, height }
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  reservations Reservation[]
+  sales        Sale[]
+
+  @@index([lastName, firstName])
+  @@index([phone])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LOCATIONS (Reservations)
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum ReservationStatus {
+  DRAFT          // devis
+  CONFIRMED      // acompte versé, dates bloquées
+  IN_PROGRESS    // robes sorties
+  RETURNED       // robes revenues, en cours d'inspection
+  COMPLETED      // caution rendue, dossier clos
+  CANCELLED
+}
+
+model Reservation {
+  id              String            @id @default(cuid())
+  reference       String            @unique           // ex: LOC-2026-0001
+  customer        Customer          @relation(fields: [customerId], references: [id])
+  customerId      String
+  status          ReservationStatus @default(DRAFT)
+
+  // Période 1 obligatoire (ex: fiançailles)
+  startDate1      DateTime          @db.Date
+  endDate1        DateTime          @db.Date
+  // Période 2 optionnelle (ex: cérémonie)
+  startDate2      DateTime?         @db.Date
+  endDate2        DateTime?         @db.Date
+
+  deliveryAddress String?
+  observation     String?
+  // Articles personnalisés du contrat (clauses éditables côté admin).
+  // Si null, on affiche les articles par défaut (lib/contract-template.ts).
+  // Forme : [{ title: string, body: string }]
+  contractArticles Json?
+  totalPrice      Decimal           @db.Decimal(10, 2) @default(0)
+  totalDeposit    Decimal           @db.Decimal(10, 2) @default(0)
+
+  items           ReservationItem[]
+  cashTx          CashTransaction[]
+  inspections     Inspection[]
+  documents       GeneratedDocument[]
+
+  createdBy       User              @relation("ReservationCreatedBy", fields: [createdById], references: [id])
+  createdById     String
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([startDate1, endDate1])
+  @@index([startDate2, endDate2])
+  @@index([status])
+  @@index([customerId])
+}
+
+model ReservationItem {
+  id            String          @id @default(cuid())
+  reservation   Reservation     @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  reservationId String
+
+  variant       ProductVariant  @relation(fields: [variantId], references: [id])
+  variantId     String
+
+  quantity      Int             @default(1)
+  price         Decimal         @db.Decimal(10, 2)                   // forfait location facturé
+  deposit       Decimal         @db.Decimal(10, 2) @default(0)
+
+  @@index([reservationId])
+  @@index([variantId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VENTES
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum SaleStatus {
+  DRAFT
+  COMPLETED
+  CANCELLED
+}
+
+model Sale {
+  id          String     @id @default(cuid())
+  reference   String     @unique                     // ex: VTE-2026-0001
+  customer    Customer?  @relation(fields: [customerId], references: [id])
+  customerId  String?                                // peut être anonyme
+  status      SaleStatus @default(DRAFT)
+  saleDate    DateTime   @default(now()) @db.Date
+  totalAmount Decimal    @db.Decimal(10, 2) @default(0)
+  items       SaleItem[]
+  cashTx      CashTransaction[]
+  documents   GeneratedDocument[]
+
+  createdBy   User       @relation("SaleCreatedBy", fields: [createdById], references: [id])
+  createdById String
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  @@index([saleDate])
+  @@index([status])
+  @@index([customerId])
+}
+
+model SaleItem {
+  id        String         @id @default(cuid())
+  sale      Sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  saleId    String
+  variant   ProductVariant @relation(fields: [variantId], references: [id])
+  variantId String
+  quantity  Int            @default(1)
+  unitPrice Decimal        @db.Decimal(10, 2)
+
+  @@index([saleId])
+  @@index([variantId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CAISSE (transactions de caisse — paiements clients, dépenses, dépôts…)
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum CashKind {
+  CLIENT_PAYMENT       // paiement client (sur résa ou vente)
+  DEPOSIT_HELD         // caution prise
+  DEPOSIT_BACK         // caution rendue
+  EXPENSE              // dépense (électricité, fournitures…)
+  CASH_REFILL          // alimentation de caisse
+  WITHDRAWAL           // retrait d'argent
+  REFUND
+  FEE                  // pénalité (retard, dégât…)
+}
+
+enum CashMethod {
+  CASH
+  CARD
+  TRANSFER
+  CHECK
+}
+
+model CashTransaction {
+  id            String       @id @default(cuid())
+  kind          CashKind
+  method        CashMethod   @default(CASH)
+  amount        Decimal      @db.Decimal(10, 2)
+  description   String?
+  category      String?                              // pour EXPENSE: électricité, eau, fournitures…
+
+  reservation   Reservation? @relation(fields: [reservationId], references: [id])
+  reservationId String?
+  sale          Sale?        @relation(fields: [saleId], references: [id])
+  saleId        String?
+
+  recordedBy    User         @relation(fields: [recordedById], references: [id])
+  recordedById  String
+  occurredAt    DateTime     @default(now())
+  notes         String?
+
+  @@index([occurredAt])
+  @@index([kind])
+  @@index([reservationId])
+  @@index([saleId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INSPECTIONS (état départ / retour des locations)
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum InspectionType {
+  CHECKOUT       // au départ
+  RETURN         // au retour
+}
+
+model Inspection {
+  id            String         @id @default(cuid())
+  reservation   Reservation    @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  reservationId String
+  type          InspectionType
+  performedBy   User           @relation(fields: [performedById], references: [id])
+  performedById String
+  performedAt   DateTime       @default(now())
+  conditionOk   Boolean        @default(true)
+  damageNotes   String?
+  photos        Photo[]
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DOCUMENTS GÉNÉRÉS (PDF contrats)
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum DocTemplateType {
+  RENTAL_CONTRACT
+  SALE_CONTRACT
+  INVOICE
+  OTHER
+}
+
+model DocumentTemplate {
+  id            String          @id @default(cuid())
+  name          String
+  type          DocTemplateType
+  titleHeader   String          @default("CONTRAT")
+  primaryColor  String          @default("#5B5BD6")
+  fontFamily    String          @default("Arial")
+  htmlContent   String          @db.Text
+  generatedDocs GeneratedDocument[]
+  updatedBy     User?           @relation("DocTemplateUpdatedBy", fields: [updatedById], references: [id])
+  updatedById   String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+}
+
+model GeneratedDocument {
+  id            String           @id @default(cuid())
+  filename      String
+  url           String                                       // URL MinIO
+  template      DocumentTemplate @relation(fields: [templateId], references: [id])
+  templateId    String
+
+  reservation   Reservation?     @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  reservationId String?
+  sale          Sale?            @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  saleId        String?
+
+  generatedBy   User             @relation(fields: [generatedById], references: [id])
+  generatedById String
+  generatedAt   DateTime         @default(now())
+
+  @@index([reservationId])
+  @@index([saleId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NOTIFICATIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum NotificationType {
+  RENTAL_CREATED
+  RENTAL_PAYMENT
+  SALE_COMPLETED
+  SALE_PAYMENT
+  CASH_EXPENSE
+  CASH_REFILL
+  CASH_WITHDRAWAL
+  DAILY_BRIEFING_MORNING
+  DAILY_BRIEFING_EVENING
+  DEPOSIT_OVERDUE
+  STOCK_OUT
+  GENERIC
+}
+
+model Notification {
+  id            String           @id @default(cuid())
+  type          NotificationType
+  title         String
+  body          String?
+  data          Json?
+  link          String?
+  user          User             @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+  userId        String
+  readAt        DateTime?
+  createdAt     DateTime         @default(now())
+
+  @@index([userId, readAt, createdAt])
+  @@index([userId, createdAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDIT LOG (module Operations)
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum AuditOperation {
+  CREATE
+  UPDATE
+  DELETE
+}
+
+model AuditLog {
+  id         String         @id @default(cuid())
+  entityType String                                 // "Reservation", "Product", "Customer"…
+  entityId   String
+  operation  AuditOperation
+  user       User           @relation(fields: [userId], references: [id])
+  userId     String
+  diff       Json?                                  // before/after pour UPDATE
+  occurredAt DateTime       @default(now())
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([occurredAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PARAMÈTRES (singleton — toujours id=1)
+// ═══════════════════════════════════════════════════════════════════════════
+
+model SiteSettings {
+  id             Int      @id @default(1)
+  companyName    String   @default("Maya Couture")
+  companyAddress String?
+  companyPhone   String?
+  companyEmail   String?
+  currency       String   @default("DZD")           // "DZD", "EUR"…
+  primaryColor   String   @default("#5B5BD6")
+  fontFamily     String   @default("Arial")
+  logoUrl        String?
+  publicSiteUrl  String?                            // pour la V2 catalogue public
+  updatedAt      DateTime @updatedAt
+}
