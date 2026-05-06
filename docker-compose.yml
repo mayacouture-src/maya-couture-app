@@ -59,11 +59,13 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
-    # Bind sur la loopback uniquement — c'est `tailscale serve` (sur l'hôte)
-    # qui prend les requêtes HTTPS du tailnet et les forwarde ici.
-    # Aucun port public n'est ouvert.
+    # Mode VPS public : 80 (redirige auto vers 443) + 443 (HTTPS).
+    # Caddy obtient le cert Let's Encrypt automatiquement pour $DOMAIN.
     ports:
-      - "127.0.0.1:8080:80"
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

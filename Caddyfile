@@ -1,11 +1,9 @@
-# Caddy écoute en HTTP simple sur :80 dans le conteneur (mappé sur
-# 127.0.0.1:8080 de l'hôte). Pas de TLS ici — c'est `tailscale serve` qui
-# termine le HTTPS sur le tailnet avec un vrai certificat Let's Encrypt
-# pour le domaine *.ts.net.
-:80 {
+# Mode VPS public : Caddy écoute sur 80/443 et négocie automatiquement
+# un certificat HTTPS Let's Encrypt pour {$DOMAIN}.
+{$DOMAIN} {
     encode zstd gzip
 
-    # Photos servies depuis MinIO
+    # Photos servies depuis MinIO (bucket maya-photos)
     handle_path /media/* {
         rewrite * /maya-photos{uri}
         reverse_proxy minio:9000
@@ -13,4 +11,11 @@
 
     # App Next.js
     reverse_proxy app:3000
+
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+    }
 }
