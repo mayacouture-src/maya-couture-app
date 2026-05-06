@@ -43,8 +43,10 @@ if [ -f "$CONF" ]; then
   case "$yn" in [yY]*) ;; *) echo "Conservé." ;; esac
 fi
 
+TARGET_USER="${SUDO_USER:-$USER}"
+
 if [ ! -f "$CONF" ] || [[ "${yn:-}" =~ ^[yY] ]]; then
-  read -rp "MAYA_BASE_URL (ex: https://maya.tail-xxxx.ts.net) : " URL
+  read -rp "MAYA_BASE_URL (ex: https://atelier.maya-couture.com) : " URL
   read -rsp "CRON_SECRET (la valeur dans .env) : " SECRET
   echo
   cat > "$CONF" <<EOF
@@ -53,19 +55,20 @@ if [ ! -f "$CONF" ] || [[ "${yn:-}" =~ ^[yY] ]]; then
 MAYA_BASE_URL="${URL}"
 CRON_SECRET="${SECRET}"
 EOF
+  chown "root:${TARGET_USER}" "$CONF"
   chmod 640 "$CONF"
-  echo "Écrit : $CONF (mode 640)"
+  echo "Écrit : $CONF (owner root:${TARGET_USER}, mode 640)"
 fi
 
 # ─── 2. Log file ────────────────────────────────────────────────────────────
 if [ ! -f "$LOG" ]; then
   touch "$LOG"
-  chmod 664 "$LOG"
-  echo "Créé : $LOG"
+  chown "${TARGET_USER}:${TARGET_USER}" "$LOG"
+  chmod 644 "$LOG"
+  echo "Créé : $LOG (owner ${TARGET_USER})"
 fi
 
 # ─── 3. Crontab ─────────────────────────────────────────────────────────────
-TARGET_USER="${SUDO_USER:-$USER}"
 echo "Installation des entrées crontab pour l'utilisateur : $TARGET_USER"
 
 # On préserve les lignes existantes qui n'appartiennent pas à Maya, on remplace
